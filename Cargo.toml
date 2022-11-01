@@ -1,0 +1,27 @@
+[package]
+name = "esp32-sdcard"
+version = "0.1.0"
+authors = ["hammer90"]
+edition = "2021"
+categories = ["embedded", "hardware-support"]
+keywords = ["embedded", "svc", "idf", "esp-idf", "esp32"]
+description = "SD Card libary for ESP32"
+repository = "https://github.com/hammer90/esp32-sdcard"
+license = "MIT"
+readme = "README.md"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = {version = "1", features = ["backtrace"]}
+log = "0.4"
+esp-idf-sys = { version = "0.31", features = ["binstart"] }
+esp-idf-svc = "0.40"
+esp-idf-hal = "0.36"
+embedded-svc = "0.20"
+embedded-hal = "0.2"
+
+[build-dependencies]
+embuild = "0.28.2"
+anyhow = "1"
+
