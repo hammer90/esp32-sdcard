@@ -17,17 +17,6 @@ use esp_idf_sys::{
     FATFS,
 };
 
-fn cp_str(s: &str) -> Result<[c_types::c_char; 32]> {
-    assert!(s.len() < 32);
-    let mut buf = [0_i8; 32];
-    let cs = CString::new(s)?;
-    let ss: &[u8] = cs.as_bytes_with_nul();
-    for i in 0..s.len() {
-        buf[i] = ss[i] as i8;
-    }
-    Ok(buf)
-}
-
 pub struct SdPins {
     pub cmd: Gpio15<Input>,
     pub clk: Gpio14<Input>,
@@ -135,7 +124,7 @@ impl Drop for SdmmcCard {
 pub struct MountedFat {
     _sdmmc_card: Arc<SdmmcCard>,
     card: *mut sdmmc_card_t,
-    base_path: [i8; 32],
+    base_path: CString,
     drv: u8,
     fat_drive: [i8; 3],
     fatfs: *mut FATFS,
@@ -179,20 +168,19 @@ impl MountedFat {
             let mut pfatfs: *mut FATFS = std::ptr::null_mut();
             let ppfatfs: *mut *mut FATFS = &mut pfatfs;
             let fat_drive: [i8; 3] = [(0x30 + drv).try_into().unwrap(), 0x3a, 0];
-            let base_path = cp_str(mount_point)?;
+            let base_path = CString::new(mount_point)?;
             // connect base_path to fat_drive and allocate memory for fatfs
-            let err =
-                esp_vfs_fat_register(&base_path as *const i8, &fat_drive as *const i8, 8, ppfatfs);
+            let err = esp_vfs_fat_register(base_path.as_ptr(), &fat_drive as *const i8, 8, ppfatfs);
             if err != 0 {
                 ff_diskio_register(drv, std::ptr::null());
                 free(card as *mut c_types::c_void);
                 bail!("failed to esp_vfs_fat_register {}", err);
             }
             // finally mount first FAT32 partition
-            let err = f_mount(pfatfs, &base_path as *const i8, 1);
+            let err = f_mount(pfatfs, base_path.as_ptr(), 1);
             if err != 0 {
                 ff_diskio_register(drv, std::ptr::null());
-                let err = esp_vfs_fat_unregister_path(&base_path as *const i8);
+                let err = esp_vfs_fat_unregister_path(base_path.as_ptr());
                 if err != 0 {
                     warn!("failed to esp_vfs_fat_unregister_path {}", err);
                 }
@@ -230,7 +218,7 @@ impl Drop for MountedFat {
                 warn!("failed to unmount {}", err);
             }
             ff_diskio_register(self.drv, std::ptr::null());
-            let err = esp_vfs_fat_unregister_path(&self.base_path as *const i8);
+            let err = esp_vfs_fat_unregister_path(self.base_path.as_ptr());
             if err != 0 {
                 warn!("failed to esp_vfs_fat_unregister_path {}", err);
             }
