@@ -1,14 +1,14 @@
 #![allow(clippy::single_component_path_imports)]
 
-use std::ffi::CString;
+use std::ffi::{c_void, CString};
 use std::sync::Arc;
 
 use anyhow::{bail, Result};
 use log::*;
 
-use esp_idf_hal::gpio::{Gpio12, Gpio13, Gpio14, Gpio15, Gpio2, Gpio4, Input, Pull};
+use esp_idf_hal::gpio::{Gpio12, Gpio13, Gpio14, Gpio15, Gpio2, Gpio4, InputOutput, PinDriver};
 use esp_idf_sys::{
-    self, c_types, esp_vfs_fat_register, esp_vfs_fat_unregister_path, f_mount, ff_diskio_get_drive,
+    self, esp_vfs_fat_register, esp_vfs_fat_unregister_path, f_mount, ff_diskio_get_drive,
     ff_diskio_register, ff_diskio_register_sdmmc, free, malloc, memcpy, sdmmc_card_init,
     sdmmc_card_t, sdmmc_host_deinit, sdmmc_host_do_transaction, sdmmc_host_get_slot_width,
     sdmmc_host_init, sdmmc_host_init_slot, sdmmc_host_io_int_enable, sdmmc_host_io_int_wait,
@@ -18,28 +18,39 @@ use esp_idf_sys::{
 };
 
 pub struct SdPins {
-    pub cmd: Gpio15<Input>,
-    pub clk: Gpio14<Input>,
-    pub d0: Gpio2<Input>,
-    pub d1: Gpio4<Input>,
-    pub d2: Gpio12<Input>,
-    pub d3: Gpio13<Input>,
+    pub cmd: Gpio15,
+    pub clk: Gpio14,
+    pub d0: Gpio2,
+    pub d1: Gpio4,
+    pub d2: Gpio12,
+    pub d3: Gpio13,
 }
 
-pub struct SdmmcCard {
+struct PinDrivers<'a> {
+    _cmd: PinDriver<'a, Gpio15, InputOutput>,
+    _clk: PinDriver<'a, Gpio14, InputOutput>,
+    _d0: PinDriver<'a, Gpio2, InputOutput>,
+    _d1: PinDriver<'a, Gpio4, InputOutput>,
+    _d2: PinDriver<'a, Gpio12, InputOutput>,
+    _d3: PinDriver<'a, Gpio13, InputOutput>,
+}
+
+pub struct SdmmcCard<'a> {
     card: *mut sdmmc_card_t,
     _host_config: sdmmc_host_t,
-    _pins: SdPins,
+    _pins: PinDrivers<'a>,
 }
 
-impl SdmmcCard {
-    pub fn new(mut pins: SdPins) -> Result<Self> {
-        pins.clk.set_pull_up()?;
-        pins.cmd.set_pull_up()?;
-        pins.d0.set_pull_up()?;
-        pins.d1.set_pull_up()?;
-        pins.d2.set_pull_up()?;
-        pins.d3.set_pull_up()?;
+impl<'a> SdmmcCard<'a> {
+    pub fn new(pins: SdPins) -> Result<Self> {
+        let pins = PinDrivers {
+            _cmd: PinDriver::input_output(pins.cmd)?,
+            _clk: PinDriver::input_output(pins.clk)?,
+            _d0: PinDriver::input_output(pins.d0)?,
+            _d1: PinDriver::input_output(pins.d1)?,
+            _d2: PinDriver::input_output(pins.d2)?,
+            _d3: PinDriver::input_output(pins.d3)?,
+        };
         unsafe {
             let err = sdmmc_host_init();
             if err != 0 {
@@ -87,7 +98,7 @@ impl SdmmcCard {
             let err = sdmmc_card_init(phost_config, card);
             if err != 0 {
                 sdmmc_host_deinit();
-                free(card as *mut c_types::c_void);
+                free(card as *mut c_void);
                 bail!("failed to sdmmc_card_init {}", err);
             }
 
@@ -112,17 +123,17 @@ impl SdmmcCard {
     }
 }
 
-impl Drop for SdmmcCard {
+impl<'a> Drop for SdmmcCard<'a> {
     fn drop(&mut self) {
         unsafe {
             sdmmc_host_deinit();
-            free(self.card as *mut c_types::c_void);
+            free(self.card as *mut c_void);
         }
     }
 }
 
-pub struct MountedFat {
-    _sdmmc_card: Arc<SdmmcCard>,
+pub struct MountedFat<'a> {
+    _sdmmc_card: Arc<SdmmcCard<'a>>,
     card: *mut sdmmc_card_t,
     base_path: CString,
     drv: u8,
@@ -137,8 +148,8 @@ pub struct FatFsStatistics {
     sector_size: u16,
 }
 
-impl MountedFat {
-    pub fn mount(sdmmc_card: Arc<SdmmcCard>, mount_point: &str) -> Result<Self> {
+impl<'a> MountedFat<'a> {
+    pub fn mount(sdmmc_card: Arc<SdmmcCard<'a>>, mount_point: &str) -> Result<Self> {
         unsafe {
             let card_size: u32 = std::mem::size_of::<sdmmc_card_t>()
                 .try_into()
@@ -149,8 +160,8 @@ impl MountedFat {
             }
 
             memcpy(
-                card as *mut c_types::c_void,
-                sdmmc_card.card as *mut c_types::c_void,
+                card as *mut c_void,
+                sdmmc_card.card as *mut c_void,
                 card_size,
             );
 
@@ -159,7 +170,7 @@ impl MountedFat {
             // get next free drive slot
             let err = ff_diskio_get_drive(pdrv);
             if err != 0 || drv == 0xFF {
-                free(card as *mut c_types::c_void);
+                free(card as *mut c_void);
                 bail!("failed to ff_diskio_get_drive {} {}", err, drv);
             }
             // registers sdmmc driver for this disk, copies pcard (pointer only, not mem) to internal storage
@@ -173,7 +184,7 @@ impl MountedFat {
             let err = esp_vfs_fat_register(base_path.as_ptr(), &fat_drive as *const i8, 8, ppfatfs);
             if err != 0 {
                 ff_diskio_register(drv, std::ptr::null());
-                free(card as *mut c_types::c_void);
+                free(card as *mut c_void);
                 bail!("failed to esp_vfs_fat_register {}", err);
             }
             // finally mount first FAT32 partition
@@ -184,7 +195,7 @@ impl MountedFat {
                 if err != 0 {
                     warn!("failed to esp_vfs_fat_unregister_path {}", err);
                 }
-                free(card as *mut c_types::c_void);
+                free(card as *mut c_void);
                 bail!("failed to f_mount {}", err);
             }
 
@@ -210,7 +221,7 @@ impl MountedFat {
     }
 }
 
-impl Drop for MountedFat {
+impl<'a> Drop for MountedFat<'a> {
     fn drop(&mut self) {
         unsafe {
             let err = f_mount(std::ptr::null_mut(), &self.fat_drive as *const i8, 0);
@@ -222,7 +233,7 @@ impl Drop for MountedFat {
             if err != 0 {
                 warn!("failed to esp_vfs_fat_unregister_path {}", err);
             }
-            free(self.card as *mut c_types::c_void);
+            free(self.card as *mut c_void);
         }
     }
 }
