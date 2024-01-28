@@ -33,3 +33,5 @@ So rewriting more parts in Rust would be beneficial.
 ## Example
 
 See [esp32-file-server](https://github.com/hammer90/esp32-file-server/commit/3ba3d1e3299c73564be4131628ef57835f81ab1c) for an example.
+
+Last compiled with v1.75.0-nightly.

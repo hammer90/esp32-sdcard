@@ -12,9 +12,9 @@ use esp_idf_sys::{
     ff_diskio_register, ff_diskio_register_sdmmc, free, malloc, memcpy, sdmmc_card_init,
     sdmmc_card_t, sdmmc_host_deinit, sdmmc_host_do_transaction, sdmmc_host_get_slot_width,
     sdmmc_host_init, sdmmc_host_init_slot, sdmmc_host_io_int_enable, sdmmc_host_io_int_wait,
-    sdmmc_host_set_bus_ddr_mode, sdmmc_host_set_bus_width, sdmmc_host_set_card_clk, sdmmc_host_t,
-    sdmmc_slot_config_t, sdmmc_slot_config_t__bindgen_ty_1, sdmmc_slot_config_t__bindgen_ty_2,
-    FATFS,
+    sdmmc_host_set_bus_ddr_mode, sdmmc_host_set_bus_width, sdmmc_host_set_card_clk,
+    sdmmc_host_set_cclk_always_on, sdmmc_host_t, sdmmc_slot_config_t,
+    sdmmc_slot_config_t__bindgen_ty_1, sdmmc_slot_config_t__bindgen_ty_2, FATFS,
 };
 
 pub struct SdPins {
@@ -66,6 +66,7 @@ impl<'a> SdmmcCard<'a> {
                 get_bus_width: Some(sdmmc_host_get_slot_width),
                 set_bus_ddr_mode: Some(sdmmc_host_set_bus_ddr_mode),
                 set_card_clk: Some(sdmmc_host_set_card_clk),
+                set_cclk_always_on: Some(sdmmc_host_set_cclk_always_on),
                 do_transaction: Some(sdmmc_host_do_transaction),
                 __bindgen_anon_1: esp_idf_sys::sdmmc_host_t__bindgen_ty_1 {
                     deinit: Some(sdmmc_host_deinit),

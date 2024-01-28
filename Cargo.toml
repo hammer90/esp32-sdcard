@@ -1,6 +1,6 @@
 [package]
 name = "esp32-sdcard"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["hammer90"]
 edition = "2021"
 categories = ["embedded", "hardware-support"]
@@ -15,8 +15,8 @@ readme = "README.md"
 [dependencies]
 anyhow = {version = "1", features = ["backtrace"]}
 log = "0.4"
-esp-idf-sys = { version = "0.32", features = ["binstart"] }
-esp-idf-hal = "0.40"
+esp-idf-sys = { version = "0.34", features = ["binstart"] }
+esp-idf-hal = "0.43"
 
 [build-dependencies]
 embuild = { version = "0.31", features = ["elf"] }
