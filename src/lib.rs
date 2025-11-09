@@ -138,7 +138,7 @@ pub struct MountedFat<'a> {
     card: *mut sdmmc_card_t,
     base_path: CString,
     drv: u8,
-    fat_drive: [i8; 3],
+    fat_drive: [u8; 3],
     fatfs: *mut FATFS,
 }
 
@@ -179,10 +179,10 @@ impl<'a> MountedFat<'a> {
 
             let mut pfatfs: *mut FATFS = std::ptr::null_mut();
             let ppfatfs: *mut *mut FATFS = &mut pfatfs;
-            let fat_drive: [i8; 3] = [(0x30 + drv).try_into().unwrap(), 0x3a, 0];
+            let fat_drive: [u8; 3] = [(0x30 + drv).try_into().unwrap(), 0x3a, 0];
             let base_path = CString::new(mount_point)?;
             // connect base_path to fat_drive and allocate memory for fatfs
-            let err = esp_vfs_fat_register(base_path.as_ptr(), &fat_drive as *const i8, 8, ppfatfs);
+            let err = esp_vfs_fat_register(base_path.as_ptr(), &fat_drive as *const u8, 8, ppfatfs);
             if err != 0 {
                 ff_diskio_register(drv, std::ptr::null());
                 free(card as *mut c_void);
@@ -225,7 +225,7 @@ impl<'a> MountedFat<'a> {
 impl<'a> Drop for MountedFat<'a> {
     fn drop(&mut self) {
         unsafe {
-            let err = f_mount(std::ptr::null_mut(), &self.fat_drive as *const i8, 0);
+            let err = f_mount(std::ptr::null_mut(), &self.fat_drive as *const u8, 0);
             if err != 0 {
                 warn!("failed to unmount {}", err);
             }
