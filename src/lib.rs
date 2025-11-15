@@ -9,10 +9,11 @@ use esp_idf_hal::gpio::{Gpio12, Gpio13, Gpio14, Gpio15, Gpio2, Gpio4, InputOutpu
 use esp_idf_sys::{
     self, esp_vfs_fat_register, esp_vfs_fat_unregister_path, f_mount, ff_diskio_get_drive,
     ff_diskio_register, ff_diskio_register_sdmmc, free, malloc, memcpy, sdmmc_card_init,
-    sdmmc_card_t, sdmmc_host_deinit, sdmmc_host_do_transaction, sdmmc_host_get_real_freq,
-    sdmmc_host_get_slot_width, sdmmc_host_init, sdmmc_host_init_slot, sdmmc_host_io_int_enable,
-    sdmmc_host_io_int_wait, sdmmc_host_set_bus_ddr_mode, sdmmc_host_set_bus_width,
-    sdmmc_host_set_card_clk, sdmmc_host_set_cclk_always_on, sdmmc_host_t, sdmmc_slot_config_t,
+    sdmmc_card_t, sdmmc_host_deinit, sdmmc_host_do_transaction, sdmmc_host_get_dma_info,
+    sdmmc_host_get_real_freq, sdmmc_host_get_slot_width, sdmmc_host_init, sdmmc_host_init_slot,
+    sdmmc_host_io_int_enable, sdmmc_host_io_int_wait, sdmmc_host_set_bus_ddr_mode,
+    sdmmc_host_set_bus_width, sdmmc_host_set_card_clk, sdmmc_host_set_cclk_always_on,
+    sdmmc_host_set_input_delay, sdmmc_host_t, sdmmc_slot_config_t,
     sdmmc_slot_config_t__bindgen_ty_1, sdmmc_slot_config_t__bindgen_ty_2, FATFS,
 };
 
@@ -26,12 +27,12 @@ pub struct SdPins {
 }
 
 struct PinDrivers<'a> {
-    _cmd: PinDriver<'a, Gpio15, InputOutput>,
-    _clk: PinDriver<'a, Gpio14, InputOutput>,
-    _d0: PinDriver<'a, Gpio2, InputOutput>,
-    _d1: PinDriver<'a, Gpio4, InputOutput>,
-    _d2: PinDriver<'a, Gpio12, InputOutput>,
-    _d3: PinDriver<'a, Gpio13, InputOutput>,
+    cmd: PinDriver<'a, Gpio15, InputOutput>,
+    clk: PinDriver<'a, Gpio14, InputOutput>,
+    d0: PinDriver<'a, Gpio2, InputOutput>,
+    d1: PinDriver<'a, Gpio4, InputOutput>,
+    d2: PinDriver<'a, Gpio12, InputOutput>,
+    d3: PinDriver<'a, Gpio13, InputOutput>,
 }
 
 pub struct SdmmcCard<'a> {
@@ -43,12 +44,12 @@ pub struct SdmmcCard<'a> {
 impl<'a> SdmmcCard<'a> {
     pub fn new(pins: SdPins) -> Result<Self> {
         let pins = PinDrivers {
-            _cmd: PinDriver::input_output(pins.cmd)?,
-            _clk: PinDriver::input_output(pins.clk)?,
-            _d0: PinDriver::input_output(pins.d0)?,
-            _d1: PinDriver::input_output(pins.d1)?,
-            _d2: PinDriver::input_output(pins.d2)?,
-            _d3: PinDriver::input_output(pins.d3)?,
+            cmd: PinDriver::input_output(pins.cmd)?,
+            clk: PinDriver::input_output(pins.clk)?,
+            d0: PinDriver::input_output(pins.d0)?,
+            d1: PinDriver::input_output(pins.d1)?,
+            d2: PinDriver::input_output(pins.d2)?,
+            d3: PinDriver::input_output(pins.d3)?,
         };
         unsafe {
             let err = sdmmc_host_init();
@@ -74,12 +75,27 @@ impl<'a> SdmmcCard<'a> {
                 io_int_wait: Some(sdmmc_host_io_int_wait),
                 command_timeout_ms: 0,
                 get_real_freq: Some(sdmmc_host_get_real_freq),
+                input_delay_phase: 0,
+                set_input_delay: Some(sdmmc_host_set_input_delay),
+                dma_aligned_buffer: std::ptr::null_mut(),
+                pwr_ctrl_handle: std::ptr::null_mut(),
+                get_dma_info: Some(sdmmc_host_get_dma_info),
             };
             let slot_config = sdmmc_slot_config_t {
                 __bindgen_anon_1: sdmmc_slot_config_t__bindgen_ty_1 { gpio_cd: -1 },
                 __bindgen_anon_2: sdmmc_slot_config_t__bindgen_ty_2 { gpio_wp: -1 },
-                width: 0,
+                width: 4,
                 flags: 0,
+                clk: pins.clk.pin(),
+                cmd: pins.cmd.pin(),
+                d0: pins.d0.pin(),
+                d1: pins.d1.pin(),
+                d2: pins.d2.pin(),
+                d3: pins.d3.pin(),
+                d4: -1,
+                d5: -1,
+                d6: -1,
+                d7: -1,
             };
             let pslot_config: *const sdmmc_slot_config_t = &slot_config;
             // configures pins (again)
