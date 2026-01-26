@@ -127,6 +127,14 @@ impl<'a> SdmmcCard<'a> {
         }
     }
 
+    pub fn sector_count(&self) -> i32 {
+        unsafe { (*self.card).csd.capacity }
+    }
+
+    pub fn sector_size(&self) -> i32 {
+        unsafe { (*self.card).csd.sector_size }
+    }
+
     pub fn size(&self) -> i64 {
         unsafe {
             let capacity: i64 = (*self.card).csd.capacity.into();
