@@ -1,20 +1,24 @@
 #![allow(clippy::single_component_path_imports)]
 
-use std::ffi::{c_void, CString};
+use std::{
+    ffi::{c_void, CString},
+    num::NonZeroI32,
+};
 
 use anyhow::{bail, Result};
 use log::*;
 
 use esp_idf_hal::gpio::{Gpio12, Gpio13, Gpio14, Gpio15, Gpio2, Gpio4, InputOutput, PinDriver};
 use esp_idf_sys::{
-    self, esp_vfs_fat_register, esp_vfs_fat_unregister_path, f_mount, ff_diskio_get_drive,
+    self, esp, esp_vfs_fat_register, esp_vfs_fat_unregister_path, f_mount, ff_diskio_get_drive,
     ff_diskio_register, ff_diskio_register_sdmmc, free, malloc, memcpy, sdmmc_card_init,
     sdmmc_card_t, sdmmc_host_deinit, sdmmc_host_do_transaction, sdmmc_host_get_dma_info,
     sdmmc_host_get_real_freq, sdmmc_host_get_slot_width, sdmmc_host_init, sdmmc_host_init_slot,
     sdmmc_host_io_int_enable, sdmmc_host_io_int_wait, sdmmc_host_set_bus_ddr_mode,
     sdmmc_host_set_bus_width, sdmmc_host_set_card_clk, sdmmc_host_set_cclk_always_on,
-    sdmmc_host_set_input_delay, sdmmc_host_t, sdmmc_slot_config_t,
-    sdmmc_slot_config_t__bindgen_ty_1, sdmmc_slot_config_t__bindgen_ty_2, FATFS,
+    sdmmc_host_set_input_delay, sdmmc_host_t, sdmmc_read_sectors, sdmmc_slot_config_t,
+    sdmmc_slot_config_t__bindgen_ty_1, sdmmc_slot_config_t__bindgen_ty_2, sdmmc_write_sectors,
+    EspError, ESP_ERR_INVALID_ARG, FATFS,
 };
 
 pub struct SdPins {
@@ -145,6 +149,42 @@ impl<'a> SdmmcCard<'a> {
 
     pub fn read_block_len(&self) -> i32 {
         unsafe { (*self.card).csd.read_block_len }
+    }
+
+    pub fn read_sectors(&mut self, start_sector: usize, buf: &mut [u8]) -> Result<(), EspError> {
+        let sector_size = self.sector_size() as usize;
+        if buf.len() % sector_size != 0 {
+            return Err(EspError::from_non_zero(
+                NonZeroI32::new(ESP_ERR_INVALID_ARG).unwrap(),
+            ));
+        }
+        let sector_count = buf.len() / sector_size;
+        unsafe {
+            esp!(sdmmc_read_sectors(
+                self.card,
+                buf.as_mut_ptr() as *mut c_void,
+                start_sector,
+                sector_count
+            ))
+        }
+    }
+
+    pub fn write_sectors(&mut self, start_sector: usize, buf: &[u8]) -> Result<(), EspError> {
+        let sector_size = self.sector_size() as usize;
+        if buf.len() % sector_size != 0 {
+            return Err(EspError::from_non_zero(
+                NonZeroI32::new(ESP_ERR_INVALID_ARG).unwrap(),
+            ));
+        }
+        let sector_count = buf.len() / sector_size;
+        unsafe {
+            esp!(sdmmc_write_sectors(
+                self.card,
+                buf.as_ptr() as *const c_void,
+                start_sector,
+                sector_count
+            ))
+        }
     }
 }
 
