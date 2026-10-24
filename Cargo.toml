@@ -1,6 +1,6 @@
 [package]
 name = "esp32-sdcard"
-version = "0.4.0"
+version = "0.5.0"
 authors = ["hammer90"]
 edition = "2021"
 categories = ["embedded", "hardware-support"]
@@ -13,11 +13,11 @@ readme = "README.md"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-anyhow = { version = "1.0.100", features = ["backtrace"] }
-log = "0.4.28"
-esp-idf-hal = "0.45.2"
-esp-idf-sys = "0.36.1"
+anyhow = { version = "1.0.104", features = ["backtrace"] }
+log = "0.4.34"
+esp-idf-hal = "0.47.0"
+esp-idf-sys = "0.38.1"
 
 [build-dependencies]
-embuild = { version = "0.33.0", features = ["elf"] }
-anyhow = "1.0.100"
+embuild = { version = "0.33.7", features = ["elf"] }
+anyhow = "1.0.104"

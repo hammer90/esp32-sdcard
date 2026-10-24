@@ -8,35 +8,71 @@ use std::{
 use anyhow::{bail, Result};
 use log::*;
 
-use esp_idf_hal::gpio::{Gpio12, Gpio13, Gpio14, Gpio15, Gpio2, Gpio4, InputOutput, PinDriver};
+use esp_idf_hal::{
+    gpio::{
+        AnyInputPin, AnyOutputPin, Gpio12, Gpio13, Gpio14, Gpio15, Gpio2, Gpio4, InputOutput,
+        PinDriver, Pull,
+    },
+    sd::{spi::SdSpiHostDriver, SdCardConfiguration, SdCardDriver},
+    spi::{Dma, SpiAnyPins, SpiDriver, SpiDriverConfig},
+};
 use esp_idf_sys::{
     self, esp, esp_vfs_fat_register, esp_vfs_fat_unregister_path, f_mount, ff_diskio_get_drive,
     ff_diskio_register, ff_diskio_register_sdmmc, free, malloc, memcpy, sdmmc_card_init,
-    sdmmc_card_t, sdmmc_host_deinit, sdmmc_host_do_transaction, sdmmc_host_get_dma_info,
+    sdmmc_card_t, sdmmc_current_limit_t_SDMMC_CURRENT_LIMIT_200MA,
+    sdmmc_driver_strength_t_SDMMC_DRIVER_STRENGTH_B, sdmmc_host_check_buffer_alignment,
+    sdmmc_host_deinit, sdmmc_host_do_transaction, sdmmc_host_get_dma_info,
     sdmmc_host_get_real_freq, sdmmc_host_get_slot_width, sdmmc_host_init, sdmmc_host_init_slot,
-    sdmmc_host_io_int_enable, sdmmc_host_io_int_wait, sdmmc_host_set_bus_ddr_mode,
-    sdmmc_host_set_bus_width, sdmmc_host_set_card_clk, sdmmc_host_set_cclk_always_on,
-    sdmmc_host_set_input_delay, sdmmc_host_t, sdmmc_read_sectors, sdmmc_slot_config_t,
-    sdmmc_slot_config_t__bindgen_ty_1, sdmmc_slot_config_t__bindgen_ty_2, sdmmc_write_sectors,
-    EspError, ESP_ERR_INVALID_ARG, FATFS,
+    sdmmc_host_io_int_enable, sdmmc_host_io_int_wait, sdmmc_host_is_slot_set_to_uhs1,
+    sdmmc_host_set_bus_ddr_mode, sdmmc_host_set_bus_width, sdmmc_host_set_card_clk,
+    sdmmc_host_set_cclk_always_on, sdmmc_host_set_input_delay, sdmmc_host_t, sdmmc_read_sectors,
+    sdmmc_slot_config_t, sdmmc_slot_config_t__bindgen_ty_1, sdmmc_slot_config_t__bindgen_ty_2,
+    sdmmc_write_sectors, EspError, ESP_ERR_INVALID_ARG, FATFS,
 };
 
-pub struct SdPins {
-    pub cmd: Gpio15,
-    pub clk: Gpio14,
-    pub d0: Gpio2,
-    pub d1: Gpio4,
-    pub d2: Gpio12,
-    pub d3: Gpio13,
+/// Same as `SDSPI_DEFAULT_DMA` of the ESP-IDF examples.
+const SPI_MAX_TRANSFER_SIZE: usize = 4000;
+
+/// An initialized card, which can be mounted with [`MountedFat::mount`].
+pub trait SdCard {
+    fn card(&self) -> &sdmmc_card_t;
+
+    fn sector_count(&self) -> i32 {
+        self.card().csd.capacity
+    }
+
+    fn sector_size(&self) -> i32 {
+        self.card().csd.sector_size
+    }
+
+    fn size(&self) -> i64 {
+        let capacity: i64 = self.sector_count().into();
+        let sector_size: i64 = self.sector_size().into();
+        capacity * sector_size
+    }
+
+    fn read_block_len(&self) -> i32 {
+        self.card().csd.read_block_len
+    }
+}
+
+/// Wiring of the 4 bit SDMMC slot 1, e.g. on the ESP32-CAM.
+pub struct SdPins<'a> {
+    pub cmd: Gpio15<'a>,
+    pub clk: Gpio14<'a>,
+    pub d0: Gpio2<'a>,
+    pub d1: Gpio4<'a>,
+    pub d2: Gpio12<'a>,
+    pub d3: Gpio13<'a>,
 }
 
 struct PinDrivers<'a> {
-    cmd: PinDriver<'a, Gpio15, InputOutput>,
-    clk: PinDriver<'a, Gpio14, InputOutput>,
-    d0: PinDriver<'a, Gpio2, InputOutput>,
-    d1: PinDriver<'a, Gpio4, InputOutput>,
-    d2: PinDriver<'a, Gpio12, InputOutput>,
-    d3: PinDriver<'a, Gpio13, InputOutput>,
+    cmd: PinDriver<'a, InputOutput>,
+    clk: PinDriver<'a, InputOutput>,
+    d0: PinDriver<'a, InputOutput>,
+    d1: PinDriver<'a, InputOutput>,
+    d2: PinDriver<'a, InputOutput>,
+    d3: PinDriver<'a, InputOutput>,
 }
 
 pub struct SdmmcCard<'a> {
@@ -46,14 +82,15 @@ pub struct SdmmcCard<'a> {
 }
 
 impl<'a> SdmmcCard<'a> {
-    pub fn new(pins: SdPins) -> Result<Self> {
+    pub fn new(pins: SdPins<'a>) -> Result<Self> {
+        // older esp-idf-hal versions kept the pull-up enabled by the pin reset
         let pins = PinDrivers {
-            cmd: PinDriver::input_output(pins.cmd)?,
-            clk: PinDriver::input_output(pins.clk)?,
-            d0: PinDriver::input_output(pins.d0)?,
-            d1: PinDriver::input_output(pins.d1)?,
-            d2: PinDriver::input_output(pins.d2)?,
-            d3: PinDriver::input_output(pins.d3)?,
+            cmd: PinDriver::input_output(pins.cmd, Pull::Up)?,
+            clk: PinDriver::input_output(pins.clk, Pull::Up)?,
+            d0: PinDriver::input_output(pins.d0, Pull::Up)?,
+            d1: PinDriver::input_output(pins.d1, Pull::Up)?,
+            d2: PinDriver::input_output(pins.d2, Pull::Up)?,
+            d3: PinDriver::input_output(pins.d3, Pull::Up)?,
         };
         unsafe {
             let err = sdmmc_host_init();
@@ -65,6 +102,8 @@ impl<'a> SdmmcCard<'a> {
                 slot: 1,
                 max_freq_khz: 20000,
                 io_voltage: 3.3,
+                driver_strength: sdmmc_driver_strength_t_SDMMC_DRIVER_STRENGTH_B,
+                current_limit: sdmmc_current_limit_t_SDMMC_CURRENT_LIMIT_200MA,
                 init: Some(sdmmc_host_init),
                 set_bus_width: Some(sdmmc_host_set_bus_width),
                 get_bus_width: Some(sdmmc_host_get_slot_width),
@@ -81,21 +120,24 @@ impl<'a> SdmmcCard<'a> {
                 get_real_freq: Some(sdmmc_host_get_real_freq),
                 input_delay_phase: 0,
                 set_input_delay: Some(sdmmc_host_set_input_delay),
+                unaligned_multi_block_rw_max_chunk_size: 16,
                 dma_aligned_buffer: std::ptr::null_mut(),
                 pwr_ctrl_handle: std::ptr::null_mut(),
                 get_dma_info: Some(sdmmc_host_get_dma_info),
+                check_buffer_alignment: Some(sdmmc_host_check_buffer_alignment),
+                is_slot_set_to_uhs1: Some(sdmmc_host_is_slot_set_to_uhs1),
             };
             let slot_config = sdmmc_slot_config_t {
                 __bindgen_anon_1: sdmmc_slot_config_t__bindgen_ty_1 { gpio_cd: -1 },
                 __bindgen_anon_2: sdmmc_slot_config_t__bindgen_ty_2 { gpio_wp: -1 },
                 width: 4,
                 flags: 0,
-                clk: pins.clk.pin(),
-                cmd: pins.cmd.pin(),
-                d0: pins.d0.pin(),
-                d1: pins.d1.pin(),
-                d2: pins.d2.pin(),
-                d3: pins.d3.pin(),
+                clk: pins.clk.pin().into(),
+                cmd: pins.cmd.pin().into(),
+                d0: pins.d0.pin().into(),
+                d1: pins.d1.pin().into(),
+                d2: pins.d2.pin().into(),
+                d3: pins.d3.pin().into(),
                 d4: -1,
                 d5: -1,
                 d6: -1,
@@ -129,26 +171,6 @@ impl<'a> SdmmcCard<'a> {
                 _pins: pins,
             })
         }
-    }
-
-    pub fn sector_count(&self) -> i32 {
-        unsafe { (*self.card).csd.capacity }
-    }
-
-    pub fn sector_size(&self) -> i32 {
-        unsafe { (*self.card).csd.sector_size }
-    }
-
-    pub fn size(&self) -> i64 {
-        unsafe {
-            let capacity: i64 = (*self.card).csd.capacity.into();
-            let sector_size: i64 = (*self.card).csd.sector_size.into();
-            capacity * sector_size
-        }
-    }
-
-    pub fn read_block_len(&self) -> i32 {
-        unsafe { (*self.card).csd.read_block_len }
     }
 
     pub fn read_sectors(&mut self, start_sector: usize, buf: &mut [u8]) -> Result<(), EspError> {
@@ -188,6 +210,12 @@ impl<'a> SdmmcCard<'a> {
     }
 }
 
+impl SdCard for SdmmcCard<'_> {
+    fn card(&self) -> &sdmmc_card_t {
+        unsafe { &*self.card }
+    }
+}
+
 impl<'a> Drop for SdmmcCard<'a> {
     fn drop(&mut self) {
         unsafe {
@@ -197,8 +225,49 @@ impl<'a> Drop for SdmmcCard<'a> {
     }
 }
 
-pub struct MountedFat<'a> {
-    _sdmmc_card: SdmmcCard<'a>,
+/// Wiring of a card in SPI mode, e.g. on the Inkplate boards.
+pub struct SdSpiPins<'a> {
+    pub sclk: AnyOutputPin<'a>,
+    pub mosi: AnyOutputPin<'a>,
+    pub miso: AnyInputPin<'a>,
+    pub cs: AnyOutputPin<'a>,
+}
+
+/// Card in SPI mode, the SPI bus is exclusively used for the card.
+pub struct SdSpiCard<'a> {
+    driver: SdCardDriver<SdSpiHostDriver<'a, SpiDriver<'a>>>,
+}
+
+impl<'a> SdSpiCard<'a> {
+    pub fn new(spi: impl SpiAnyPins + 'a, pins: SdSpiPins<'a>) -> Result<Self> {
+        let bus = SpiDriver::new(
+            spi,
+            pins.sclk,
+            pins.mosi,
+            Some(pins.miso),
+            &SpiDriverConfig::new().dma(Dma::Auto(SPI_MAX_TRANSFER_SIZE)),
+        )?;
+        let host = SdSpiHostDriver::new(
+            bus,
+            Some(pins.cs),
+            None::<AnyInputPin>,
+            None::<AnyInputPin>,
+            None::<AnyInputPin>,
+            None,
+        )?;
+        let driver = SdCardDriver::new_spi(host, &SdCardConfiguration::new())?;
+        Ok(Self { driver })
+    }
+}
+
+impl SdCard for SdSpiCard<'_> {
+    fn card(&self) -> &sdmmc_card_t {
+        self.driver.card()
+    }
+}
+
+pub struct MountedFat<C> {
+    _sd_card: C,
     card: *mut sdmmc_card_t,
     base_path: CString,
     drv: u8,
@@ -213,8 +282,8 @@ pub struct FatFsStatistics {
     sector_size: u16,
 }
 
-impl<'a> MountedFat<'a> {
-    pub fn mount(sdmmc_card: SdmmcCard<'a>, mount_point: &str) -> Result<Self> {
+impl<C: SdCard> MountedFat<C> {
+    pub fn mount(sd_card: C, mount_point: &str) -> Result<Self> {
         unsafe {
             let card_size: u32 = std::mem::size_of::<sdmmc_card_t>()
                 .try_into()
@@ -226,7 +295,7 @@ impl<'a> MountedFat<'a> {
 
             memcpy(
                 card as *mut c_void,
-                sdmmc_card.card as *mut c_void,
+                std::ptr::from_ref(sd_card.card()).cast(),
                 card_size,
             );
 
@@ -265,7 +334,7 @@ impl<'a> MountedFat<'a> {
             }
 
             Ok(Self {
-                _sdmmc_card: sdmmc_card,
+                _sd_card: sd_card,
                 card,
                 base_path,
                 drv,
@@ -286,7 +355,7 @@ impl<'a> MountedFat<'a> {
     }
 }
 
-impl<'a> Drop for MountedFat<'a> {
+impl<C> Drop for MountedFat<C> {
     fn drop(&mut self) {
         unsafe {
             let err = f_mount(std::ptr::null_mut(), &self.fat_drive as *const u8, 0);
